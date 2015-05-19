@@ -324,6 +324,7 @@ class FatTreeTopo(StructuredTopo):
         self.id_gen = FatTreeTopo.FatTreeNodeID
         self.numPods = k
         self.aggPerPod = k / 2
+        self.node_info = {}
 
         pods = range(0, k)
         core_sws = range(1, k / 2 + 1)
@@ -336,18 +337,21 @@ class FatTreeTopo(StructuredTopo):
                 edge_id = self.id_gen(p, e, 1).name_str()
                 edge_opts = self.def_nopts(self.LAYER_EDGE, edge_id)
                 self.addSwitch(edge_id, **edge_opts)
+                self.node_info[edge_id] = {'layer': self.LAYER_EDGE}
 
                 for h in hosts:
                     host_id = self.id_gen(p, e, h).name_str()
                     host_opts = self.def_nopts(self.LAYER_HOST, host_id)
                     self.addHost(host_id, **host_opts)
                     self.addLink(host_id, edge_id)
+                    self.node_info[host_id] = {'layer': self.LAYER_HOST}
 
                 for a in agg_sws:
                     agg_id = self.id_gen(p, a, 1).name_str()
                     agg_opts = self.def_nopts(self.LAYER_AGG, agg_id)
                     self.addSwitch(agg_id, **agg_opts)
                     self.addLink(edge_id, agg_id)
+                    self.node_info[agg_id] = {'layer': self.LAYER_AGG}
 
             for a in agg_sws:
                 agg_id = self.id_gen(p, a, 1).name_str()
@@ -357,6 +361,7 @@ class FatTreeTopo(StructuredTopo):
                     core_opts = self.def_nopts(self.LAYER_CORE, core_id)
                     self.addSwitch(core_id, **core_opts)
                     self.addLink(core_id, agg_id)
+                    self.node_info[core_id] = {'layer': self.LAYER_CORE}
 
 
     def port(self, src, dst):
