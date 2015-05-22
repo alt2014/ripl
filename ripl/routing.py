@@ -5,13 +5,12 @@ Routing engine base class.
 
 @author Brandon Heller (brandonh@stanford.edu)
 '''
-from copy import copy
 from random import choice
 
 import logging
 lg = logging.getLogger('ripl.routing')
 
-DEBUG = False
+DEBUG = True
 
 lg.setLevel(logging.WARNING)
 if DEBUG:
@@ -81,134 +80,109 @@ class StructuredRouting(Routing):
         self.src_path_layer = None
         self.dst_path_layer = None
 
-    def _extend_reachable(self, frontier_layer):
-        '''Extend reachability up, closer to core.
-
-        @param frontier_layer layer we're extending TO, for filtering paths
-
-        @return paths list of complete paths or None if no overlap
-            invariant: path starts with src, ends in dst
-
-        If extending the reachability frontier up yields a path to a node which
-        already has some other path, then add that to a list to return of valid
-        path choices.  If multiple paths lead to the newly-reached node, then
-        add a path for every possible combination.  For this reason, beware
-        exponential path explosion.
-
-        Modifies most internal data structures as a side effect.
+    def _is_subpath(self, p1, p2):
         '''
+        Test if p1 is a subpath of p2
+            >>> _is_subpath([1,2], [1,2,3])
+                True
 
-        complete_paths = [] # List of complete dpid routes
+            >>> _is_subpath([1,2,3], [1,2,3])
+                True
 
-        # expand src frontier if it's below the dst
-        if self.src_path_layer > frontier_layer:
+            >>> _is_subpath([], [1,2,3])
+                True
 
-            src_paths_next = {}
-            # expand src frontier up
-            for node in sorted(self.src_paths):
+            >>> _is_subpath([1,3], [1,2,3])
+                False
+        '''
+        return ','.join(map(str, p1)) in ','.join(map(str, p2))
 
-                src_path_list = self.src_paths[node]
-                lg.info("src path list for node %s is %s" %
-                        (node, src_path_list))
-                if not src_path_list or len(src_path_list) == 0:
-                    continue
-                last = src_path_list[0][-1] # Last element on first list
+    def _accept_candidate_path(self, reached, candidate_path):
+        '''
+        Accepting a path means it's "new". We accept iff:
+            This path does not form a cycle
+          AND
+              We have no other path to this node
+            OR
+                This path is not a subpath of any other
+              AND
+                This is the shortest path from src -> dst
+        '''
+        b = candidate_path[-1]
+        if b in reached:
+            for path in reached[b]:
+                if len(path) < len(candidate_path):
+                    return False
+                if self._is_subpath(candidate_path, path) or self._is_subpath(path, candidate_path):
+                    return False
 
-                up_edges = self.topo.up_edges(last)
-                if not up_edges:
-                    continue
-                assert up_edges
-                up_nodes = self.topo.up_nodes(last)
-                if not up_nodes:
-                    continue
-                assert up_nodes
+            return True
+        else:
+            return True
 
-                for edge in sorted(up_edges):
-                    a, b = edge
-                    assert a == last
-                    assert b in up_nodes
-                    frontier_node = b
-                    # add path if it connects the src and dst
-                    if frontier_node in self.dst_paths:
-                        dst_path_list = self.dst_paths[frontier_node]
-                        lg.info('self.dst_paths[frontier_node] = %s' %
-                                self.dst_paths[frontier_node])
-                        for dst_path in dst_path_list:
-                            dst_path_rev = copy(dst_path)
-                            dst_path_rev.reverse()
-                            for src_path in src_path_list:
-                                new_path = src_path + dst_path_rev
-                                lg.info('adding path: %s' % new_path)
-                                complete_paths.append(new_path)
-                    else:
-                        if frontier_node not in src_paths_next:
-                            src_paths_next[frontier_node] = []
-                        for src_path in src_path_list:
-                            extended_path = src_path + [frontier_node]
-                            src_paths_next[frontier_node].append(extended_path)
-                            lg.info("adding to self.paths[%s] %s: " % \
-                                      (frontier_node, extended_path))
+    # IAW FIXME: Recomputing these paths every time is dumb. Add an instance variable to the StructuredRouting
+    # class that is a dictionary of these shortest routes from each node. Populate it once, at construction
+    # time in __init__. Then get_route can just consult those already-computed paths.
+    #
+    # That won't work for switch or link failures, when routes need to be recomputed, but for our project we
+    # probably don't care.
+    def _get_all_shortest_routes(self, src):
+        '''
+        Populate a dictionary of all nodes reachable from 'src', each mapped to all non-cylic paths to them.
+        Example:
+                      B
+                    /   \\
+                   A     D
+                    \\  /
+                      C
+            >>> _get_all_routes(A)
+                {
+                  B: [[A, B]],
+                  C: [[A, C]],
+                  D: [[A, B, D], [A, C, D]]
+                }
+        '''
+        # Keys are all the nodes we've reached from src, value is list of paths to that node
+        reached = {src: [[src]]}
+        changed = True
+        while changed:
+            lg.debug("get_all_routes(%s)=" % str(src))
+            changed = False
+            reached_ = reached.copy()
+            # For every node we've gotten to
+            for node in reached_:
+                if changed:
+                    break
 
-            # filter paths to only those in the most recently seen layer
-            lg.info("src_paths_next: %s" % src_paths_next)
-            self.src_paths = src_paths_next
-            self.src_path_layer -= 1
+                # Consider all edges out from this node
+                edges = self.topo.up_edges(node) + self.topo.down_edges(node)
+                for edge in edges:
+                    if changed:
+                        break
 
-        # expand dst frontier if it's below the rc
-        if self.dst_path_layer > frontier_layer:
+                    (a, b) = edge
+                    assert a == node
 
-            dst_paths_next = {}
-            # expand src frontier up
-            for node in self.dst_paths:
+                    # For every path up this node, try extending to b
+                    for path in reached[node]:
+                        if changed:
+                            break
 
-                dst_path_list = self.dst_paths[node]
-                lg.info("dst path list for node %s is %s" %
-                        (node, dst_path_list))
-                last = dst_path_list[0][-1] # last element on first list
+                        candidate_path = path + [b]
+                        if self._accept_candidate_path(reached, candidate_path):
+                            changed = True
+                            if b in reached:
+                                if len(reached[b][0]) == len(candidate_path):
+                                    # Equal lengths: append
+                                    reached[b].append(candidate_path)
+                                elif len(candidate_path) < len(reached[b][0]):
+                                    # Shorter: replace
+                                    reached[b] = [candidate_path]
 
-                up_edges = self.topo.up_edges(last)
-                if not up_edges:
-                    continue
-                assert up_edges
-                up_nodes = self.topo.up_nodes(last)
-                if not up_nodes:
-                    continue
-                assert up_nodes
-                lg.info("up_edges = %s" % sorted(up_edges))
-                for edge in sorted(up_edges):
-                    a, b = edge
-                    assert a == last
-                    assert b in up_nodes
-                    frontier_node = b
-                    # add path if it connects the src and dst
-                    if frontier_node in self.src_paths:
-                        src_path_list = self.src_paths[frontier_node]
-                        lg.info('self.src_paths[frontier_node] = %s' %
-                                self.src_paths[frontier_node])
-                        for src_path in src_path_list:
-                            for dst_path in dst_path_list:
-                                dst_path_rev = copy(dst_path)
-                                dst_path_rev.reverse()
-                                new_path = src_path + dst_path_rev
-                                lg.info('adding path: %s' % new_path)
-                                complete_paths.append(new_path)
+                            else:
+                                reached[b] = [candidate_path]
 
-                    else:
-                        if frontier_node not in dst_paths_next:
-                            dst_paths_next[frontier_node] = []
-                        for dst_path in dst_path_list:
-                            extended_path = dst_path + [frontier_node]
-                            dst_paths_next[frontier_node].append(extended_path)
-                            lg.info("adding to self.paths[%s] %s: " % \
-                                      (frontier_node, extended_path))
-
-            # filter paths to only those in the most recently seen layer
-            lg.info("dst_paths_next: %s" % dst_paths_next)
-            self.dst_paths = dst_paths_next
-            self.dst_path_layer -= 1
-
-        lg.info("complete paths = %s" % complete_paths)
-        return complete_paths
+        return reached
 
     def get_route(self, src, dst, hash_):
         '''Return flow path.
@@ -220,32 +194,21 @@ class StructuredRouting(Routing):
         @return flow_path list of DPIDs to traverse (including inputs), or None
         '''
 
+        lg.debug("StructuredRouting get_route: src={}, dst={}, hash_={}".format(src, dst, hash_))
+
         if src == dst:
-          return [src]
+            return [src]
 
-        self.src_paths = {src: [[src]]}
-        self.dst_paths = {dst: [[dst]]}
+        reachable = self._get_all_shortest_routes(src)
+        lg.debug("get_all_routes(%s)=" % str(src))
+        lg.debug(reachable)
 
-        src_layer = self.topo.layer(src)
-        dst_layer = self.topo.layer(dst)
-
-        # use later in extend_reachable
-        self.src_path_layer = src_layer
-        self.dst_path_layer = dst_layer
-
-        # the lowest layer is the one closest to hosts, with the highest value
-        lowest_starting_layer = src_layer
-        if dst_layer > src_layer:
-            lowest_starting_layer = dst_layer
-
-        for depth in range(lowest_starting_layer - 1, -1, -1):
-            lg.info('-------------------------------------------')
-            paths_found = self._extend_reachable(depth)
-            if paths_found:
-                path_choice = self.path_choice(paths_found, src, dst, hash_)
-                lg.info('path_choice = %s' % path_choice)
-                return path_choice
-        return None
+        if dst in reachable:
+            path_choice = self.path_choice(reachable[dst], src, dst, hash_)
+            lg.info('path_choice = %s' % path_choice)
+            return path_choice
+        else:
+            return None
 
 # Disable unused argument warnings in the classes below
 # pylint: disable-msg=W0613
