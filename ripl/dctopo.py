@@ -112,7 +112,7 @@ class StructuredTopo(Topo):
         @param name name of switch
         @return layer layer of switch
         '''
-        return self.g.node[name].get('layer')
+        return self.node_info[name]['layer']
 
     def isPortUp(self, port):
         ''' Returns whether port is facing up or down
@@ -136,33 +136,24 @@ class StructuredTopo(Topo):
         return nodes
 
     def up_nodes(self, name):
-        '''Return nodes one layer higher (closer to core).
+        '''Return edges one layer higher (closer to core).
 
         @param name name
+
         @return names list of names
         '''
         layer = self.layer(name) - 1
-
-        edges = self.g[name]
-        nodes = []
-        for dst in edges:
-            if self.layer(dst) == layer:
-                nodes.append(dst)
+        nodes = [n for n in self.g[name] if self.layer(n) == layer]
         return nodes
 
     def down_nodes(self, name):
-        '''Return nodes one layer higher (closer to hosts).
+        '''Return edges one layer higher (closer to hosts).
 
         @param name name
         @return names list of names
         '''
         layer = self.layer(name) + 1
-
-        edges = self.g[name]
-        nodes = []
-        for dst in edges:
-            if self.layer(dst) == layer:
-                nodes.append(dst)
+        nodes = [n for n in self.g[name] if self.layer(n) == layer]
         return nodes
 
     def up_edges(self, name):
@@ -333,7 +324,6 @@ class FatTreeTopo(StructuredTopo):
         self.id_gen = FatTreeTopo.FatTreeNodeID
         self.numPods = k
         self.aggPerPod = k / 2
-        self.node_info = {}
 
         pods = range(0, k)
         core_sws = range(1, k / 2 + 1)
@@ -345,19 +335,19 @@ class FatTreeTopo(StructuredTopo):
             for e in edge_sws:
                 edge_id = self.id_gen(p, e, 1).name_str()
                 edge_opts = self.def_nopts(self.LAYER_EDGE, edge_id)
-                self.addSwitch(edge_id, **edge_opts)
+                self.add_switch(edge_id, **edge_opts)
 
                 for h in hosts:
                     host_id = self.id_gen(p, e, h).name_str()
                     host_opts = self.def_nopts(self.LAYER_HOST, host_id)
-                    self.addHost(host_id, **host_opts)
-                    self.addLink(host_id, edge_id)
+                    self.add_host(host_id, **host_opts)
+                    self.add_link(host_id, edge_id)
 
                 for a in agg_sws:
                     agg_id = self.id_gen(p, a, 1).name_str()
                     agg_opts = self.def_nopts(self.LAYER_AGG, agg_id)
-                    self.addSwitch(agg_id, **agg_opts)
-                    self.addLink(edge_id, agg_id)
+                    self.add_switch(agg_id, **agg_opts)
+                    self.add_link(edge_id, agg_id)
 
             for a in agg_sws:
                 agg_id = self.id_gen(p, a, 1).name_str()
@@ -365,8 +355,8 @@ class FatTreeTopo(StructuredTopo):
                 for c in core_sws:
                     core_id = self.id_gen(k, c_index, c).name_str()
                     core_opts = self.def_nopts(self.LAYER_CORE, core_id)
-                    self.addSwitch(core_id, **core_opts)
-                    self.addLink(core_id, agg_id)
+                    self.add_switch(core_id, **core_opts)
+                    self.add_link(core_id, agg_id)
 
 
     def port(self, src, dst):
