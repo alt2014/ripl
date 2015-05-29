@@ -11,9 +11,9 @@ from random import choice
 import logging
 lg = logging.getLogger('ripl.routing')
 
-DEBUG = False
+DEBUG = True
 
-lg.setLevel(logging.WARNING)
+lg.setLevel(logging.DEBUG)
 if DEBUG:
     lg.setLevel(logging.DEBUG)
     lg.addHandler(logging.StreamHandler())
@@ -32,12 +32,13 @@ class Routing(object):
         '''
         self.topo = topo
 
-    def get_route(self, src, dst, pkt):
+    def get_route(self, src, dst, pkt, complete):
         '''Return flow path.
 
         @param src source host
         @param dst destination host
         @param hash_ hash value
+        @param complete flag to return all paths
 
         @return flow_path list of DPIDs to traverse (including hosts)
         '''
@@ -210,7 +211,26 @@ class StructuredRouting(Routing):
         lg.info("complete paths = %s" % complete_paths)
         return complete_paths
 
-    def get_route(self, src, dst, hash_):
+    def path_dfs(self, src, dst, complete_paths, current_path):
+        if src not in current_path:
+            current_path.append(src)
+            if src == dst:
+                new_path = []
+                new_path.extend(current_path)
+                complete_paths.append(new_path)
+                if len(new_path) < self.max_len:
+                    self.max_len = len(new_path)
+            elif len(current_path) < self.max_len:
+                adj_nodes = []
+                adj_nodes.extend(self.topo.up_nodes(src))
+                adj_nodes.extend(self.topo.down_nodes(src))
+                for n in adj_nodes:
+                    self.path_dfs(n, dst, complete_paths, current_path)
+
+            current_path.remove(src)
+
+
+    def get_route(self, src, dst, hash_, complete):
         '''Return flow path.
 
         @param src source dpid (for host or switch)
@@ -220,8 +240,18 @@ class StructuredRouting(Routing):
         @return flow_path list of DPIDs to traverse (including inputs), or None
         '''
 
+        lg.info("src %s" % src)
+        lg.info("dst %s" % dst)
+
         if src == dst:
-          return [src]
+          if complete: 
+            return [[src]]
+          else:
+            return [src]
+
+        # paths_found = []
+        # self.max_len = 6
+        # self.path_dfs(src, dst, paths_found, [])
 
         self.src_paths = {src: [[src]]}
         self.dst_paths = {dst: [[dst]]}
@@ -238,13 +268,22 @@ class StructuredRouting(Routing):
         if dst_layer > src_layer:
             lowest_starting_layer = dst_layer
 
+        lg.debug('src = %s' % src)
+        lg.debug('dst = %s' % dst)
+        lg.debug('lowest_starting_layer = %s' % lowest_starting_layer)
+
+
         for depth in range(lowest_starting_layer - 1, -1, -1):
             lg.info('-------------------------------------------')
             paths_found = self._extend_reachable(depth)
+            lg.info('num paths_found = %i' % len(paths_found))
             if paths_found:
-                path_choice = self.path_choice(paths_found, src, dst, hash_)
-                lg.info('path_choice = %s' % path_choice)
-                return path_choice
+                if complete:
+                    return paths_found
+                else:
+                    path_choice = self.path_choice(paths_found, src, dst, hash_)
+                    lg.info('path_choice = %s' % path_choice)
+                    return path_choice
         return None
 
 # Disable unused argument warnings in the classes below
@@ -267,7 +306,7 @@ class STStructuredRouting(StructuredRouting):
             @param src src dpid (unused)
             @param dst dst dpid (unused)
             @param hash_ hash value (unused)
-	    '''
+        '''
             return paths[0]
 
         super(STStructuredRouting, self).__init__(topo, choose_leftmost)
